@@ -30,6 +30,7 @@ int extent_server::create(uint32_t type, extent_protocol::extentid_t &id)
 
 int extent_server::put(extent_protocol::extentid_t id, std::string buf, int &)
 {
+  printf("extent_server: put %lld\n", id);
   id &= 0x7fffffff;
   
   const char * cbuf = buf.c_str();
@@ -75,7 +76,7 @@ int extent_server::getattr(extent_protocol::extentid_t id, extent_protocol::attr
 
 int extent_server::remove(extent_protocol::extentid_t id, int &)
 {
-  printf("extent_server: write %lld\n", id);
+  printf("extent_server: remove %lld\n", id);
 
   id &= 0x7fffffff;
   im->remove_file(id);

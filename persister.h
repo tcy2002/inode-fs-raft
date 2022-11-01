@@ -7,7 +7,7 @@
 #include <fstream>
 #include "rpc.h"
 
-#define MAX_LOG_SZ 1024
+#define MAX_LOG_SZ 131072
 
 #define PRINT_MSG(func, msg) printf("%s: %s\n", (func), (msg));
 #define MAX(a, b) (a) > (b) ? (a) : (b)

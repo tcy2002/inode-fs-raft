@@ -20,7 +20,7 @@
 #define MIN(a, b)   (a) < (b) ? (a) : (b)
 #define MAX(a, b)   (a) > (b) ? (a) : (b)
 
-#define MAX_NAME_LENGTH 60
+#define MAX_NAME_LENGTH 68
 
 #define PRINT_ERROR(func, msg, data) printf("%s: %s, %lld\n", (func), (msg), (data));
 
@@ -53,7 +53,7 @@ chfs_client::chfs_client()
 chfs_client::chfs_client(std::string extent_dst, std::string lock_dst)
 {
     ec = new extent_client();
-    if (ec->put(1, "") != extent_protocol::OK)
+    if (ec->put(1, "", 0) != extent_protocol::OK)
         printf("error init root dir\n"); // XYB: init root dir
 }
 
@@ -199,14 +199,17 @@ chfs_client::setattr(inum ino, size_t size)
      */
     std::string buf_old, buf_new;
     char buf[size];
+    chfs_command::txid_t tid;
 
+    EXT_RPC(ec->tx_begin(tid));
     EXT_RPC(ec->get(ino, buf_old));
 
     memset(buf, '\0', size);
     memcpy(buf, buf_old.c_str(), MIN(size, buf_old.size()));
     buf_new.assign(buf, size);
 
-    EXT_RPC(ec->put(ino, buf_new));
+    EXT_RPC(ec->put(ino, buf_new, tid));
+    EXT_RPC(ec->tx_commit(tid));
 
 release:
     return r;
@@ -214,7 +217,7 @@ release:
 
 /* add one entry to a directory */
 int 
-chfs_client::addentry(inum parent, inum ino, const char *name)
+chfs_client::addentry(inum parent, inum ino, const char *name, chfs_command::txid_t tid)
 {
     int r = OK;
     int entry_num;
@@ -243,7 +246,7 @@ chfs_client::addentry(inum parent, inum ino, const char *name)
     entries[entry_num].inum = ino;
     buf.assign((char *)entries, (entry_num + 1) * sizeof(entry));
 
-    EXT_RPC(ec->put(parent, buf));
+    EXT_RPC(ec->put(parent, buf, tid));
 
     delete[] entries;
 
@@ -253,7 +256,7 @@ release:
 
 /* remove one entry from a directory */
 int 
-chfs_client::unlinkentry(inum parent, const char *name)
+chfs_client::unlinkentry(inum parent, const char *name, chfs_command::txid_t tid)
 {
     int r = OK;
     int entry_num;
@@ -271,29 +274,23 @@ chfs_client::unlinkentry(inum parent, const char *name)
 
     entry_num = list.size();
     if (entry_num <= 1) {
-        EXT_RPC(ec->put(parent, ""));
+        EXT_RPC(ec->put(parent, "", tid));
         return r;
     }
 
     entries = new entry[entry_num - 1];
-    printf("unlinkentry: entry num %d\n", entry_num);
     for (int i = 0; i < entry_num - 1; i++) {
         de = list.front();
         if (strncmp(name, de.name.c_str(), MAX_NAME_LENGTH) != 0) {
-            printf("unlinkentry: copy entry %d\n", i);
             memcpy(entries[i].name, de.name.c_str(), MAX_NAME_LENGTH);
             entries[i].inum = de.inum;
-            printf("unlinkentry: finish copy entry %d\n", i);
         } else
             i--;
         list.pop_front();
-        printf("unlinkentry: finish loop %d\n", i);
     }
-    printf("unlinkentry: finish copy %d\n", entry_num);
     buf.assign((char *)entries, (entry_num - 1) * sizeof(entry));
-    printf("unlinkentry: finish assign %d\n", entry_num);
 
-    EXT_RPC(ec->put(parent, buf));
+    EXT_RPC(ec->put(parent, buf, tid));
 
     delete[] entries;
 
@@ -314,6 +311,11 @@ chfs_client::create(inum parent, const char *name, mode_t mode, inum &ino_out)
      */
     bool found;
     inum ino;
+    chfs_command::txid_t tid;
+
+    PRINT_MSG("chfs_client::create", name)
+
+    EXT_RPC(ec->tx_begin(tid));
 
     if (!isdir(parent)) {
         PRINT_ERROR("my create", "not dir error", parent)
@@ -327,10 +329,12 @@ chfs_client::create(inum parent, const char *name, mode_t mode, inum &ino_out)
         return EXIST;
     }
 
-    EXT_RPC(ec->create(extent_protocol::T_FILE, ino));
-    EXT_RPC(addentry(parent, ino, name));
+    EXT_RPC(ec->create(extent_protocol::T_FILE, ino, tid));
+    EXT_RPC(addentry(parent, ino, name, tid));
 
     ino_out = ino;
+
+    EXT_RPC(ec->tx_commit(tid));
 
 release:
     return r;
@@ -349,6 +353,9 @@ chfs_client::mkdir(inum parent, const char *name, mode_t mode, inum &ino_out)
      */
     bool found;
     inum ino;
+    chfs_command::txid_t tid;
+
+    EXT_RPC(ec->tx_begin(tid));
 
     if (!isdir(parent)) {
         PRINT_ERROR("my mkdir", "not dir error", parent)
@@ -362,8 +369,9 @@ chfs_client::mkdir(inum parent, const char *name, mode_t mode, inum &ino_out)
         return EXIST;
     }
 
-    EXT_RPC(ec->create(extent_protocol::T_DIR, ino));
-    EXT_RPC(addentry(parent, ino, name));
+    EXT_RPC(ec->create(extent_protocol::T_DIR, ino, tid));
+    EXT_RPC(addentry(parent, ino, name, tid));
+    EXT_RPC(ec->tx_commit(tid));
 
     ino_out = ino;
 
@@ -487,6 +495,9 @@ chfs_client::write(inum ino, size_t size, off_t off, const char *data,
     std::string buf, str_new;
     char *buf_new;
     int size_new;
+    chfs_command::txid_t tid;
+
+    EXT_RPC(ec->tx_begin(tid));
 
     if (!isfile(ino)) {
         PRINT_ERROR("my write", "not file error", ino)
@@ -502,10 +513,12 @@ chfs_client::write(inum ino, size_t size, off_t off, const char *data,
     memcpy(buf_new + off, data, size);
     str_new.assign(buf_new, size_new);
 
-    EXT_RPC(ec->put(ino, str_new));
+    EXT_RPC(ec->put(ino, str_new, tid));
 
     bytes_written = size;
     delete[] buf_new;
+
+    EXT_RPC(ec->tx_commit(tid));
 
 release:
     return r;
@@ -523,6 +536,9 @@ int chfs_client::unlink(inum parent,const char *name)
      */
     bool found;
     inum ino;
+    chfs_command::txid_t tid;
+
+    EXT_RPC(ec->tx_begin(tid));
 
     if (!isdir(parent)) {
         PRINT_ERROR("my unlink", "not dir error", parent)
@@ -540,8 +556,9 @@ int chfs_client::unlink(inum parent,const char *name)
         return IOERR;
     }
 
-    EXT_RPC(ec->remove(ino));
-    EXT_RPC(unlinkentry(parent, name));
+    EXT_RPC(ec->remove(ino, tid));
+    EXT_RPC(unlinkentry(parent, name, tid));
+    EXT_RPC(ec->tx_commit(tid));
 
 release:
     return r;
@@ -553,6 +570,9 @@ chfs_client::symlink(const char *link, inum parent, const char *name, inum &ino_
     int r = OK;
     inum ino;
     std::string buf;
+    chfs_command::txid_t tid;
+
+    EXT_RPC(ec->tx_begin(tid));
 
     if (!isdir(parent)) {
         PRINT_ERROR("my symlink", "not dir error", parent)
@@ -560,11 +580,13 @@ chfs_client::symlink(const char *link, inum parent, const char *name, inum &ino_
     }
     buf.assign(link);
 
-    EXT_RPC(ec->create(extent_protocol::T_SYMLINK, ino));
-    EXT_RPC(ec->put(ino, buf));
-    EXT_RPC(addentry(parent, ino, name));
+    EXT_RPC(ec->create(extent_protocol::T_SYMLINK, ino, tid));
+    EXT_RPC(ec->put(ino, buf, tid));
+    EXT_RPC(addentry(parent, ino, name, tid));
 
     ino_out = ino;
+
+    EXT_RPC(ec->tx_commit(tid));
 
 release:
     return r;

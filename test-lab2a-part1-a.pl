@@ -151,7 +151,7 @@ sub chfsrestart {
             sleep(0.1);
         };
     }
-    
+
     if (!mounted()) {
         print "Fail to restart chfs!\n";
         exit(1);

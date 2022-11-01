@@ -35,8 +35,8 @@ class chfs_client {
   static std::string filename(inum);
   static inum n2i(std::string);
 
-  int addentry(inum parent, inum ino, const char *name);
-  int unlinkentry(inum parent, const char *name);
+  int addentry(inum parent, inum ino, const char *name, chfs_command::txid_t tid);
+  int unlinkentry(inum parent, const char *name, chfs_command::txid_t tid);
 
  public:
   chfs_client();

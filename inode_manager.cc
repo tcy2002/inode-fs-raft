@@ -40,6 +40,7 @@ typedef struct indirect {
  * 3. consistency of alloc_block and free_block
  * 5. when overwriting a file, all occasions of old size and
  *    new size should be considered
+ *
  */
 
 // disk layer -----------------------------------------
@@ -236,7 +237,7 @@ inode_manager::inode_manager()
 /* Create a new file.
  * Return its inum. */
 uint32_t
-inode_manager::alloc_inode(uint32_t type)
+inode_manager::alloc_inode(uint32_t type, uint32_t inum)
 {
   /* 
    * your code goes here.
@@ -246,9 +247,23 @@ inode_manager::alloc_inode(uint32_t type)
     CHECK_TYPE("alloc_inode", type)
 
     struct inode *ino;
-    int inum;
+    if (inum == 0) {
+        for (inum = 1; inum <= INODE_NUM; inum++) {
+            ino = get_inode(inum);
+            if (ino->type == 0) {
+                memset(ino, 0, sizeof(inode_t));
+                ino->type = type;
+                ino->ctime = time(NULL);
+                put_inode(inum, ino);
+                free(ino);
+                return inum;
+            }
+            free(ino);
+        }
 
-    for (inum = 1; inum <= INODE_NUM; inum++) {
+        PRINT_ERROR("alloc_inode", "no free inode", 0)
+        return 0;
+    } else {
         ino = get_inode(inum);
         if (ino->type == 0) {
             memset(ino, 0, sizeof(inode_t));
@@ -258,11 +273,10 @@ inode_manager::alloc_inode(uint32_t type)
             free(ino);
             return inum;
         }
-        free(ino);
-    }
 
-    PRINT_ERROR("alloc_inode", "no free inode", 0)
-    return 0;
+        PRINT_ERROR("alloc_inode", "invalid inum", inum)
+        return 0;
+    }
 }
 
 void
@@ -277,7 +291,7 @@ inode_manager::free_inode(uint32_t inum)
 
     inode_t *ino = get_inode(inum);
     if (ino == NULL)
-        exit(EXIT_FAILURE);
+        return;
 
     memset(ino, 0, sizeof(inode_t));
     put_inode(inum, ino);
@@ -314,7 +328,7 @@ void
 inode_manager::put_inode(uint32_t inum, struct inode *ino)
 {
     if (ino == NULL)
-        exit(EXIT_FAILURE);
+        return;
     CHECK_INUM("put_inode", inum)
     CHECK_TYPE("put_inode", ino->type)
 
@@ -338,8 +352,10 @@ inode_manager::read_file(uint32_t inum, char **buf_out, int *size)
    * and copy them to buf_out
    */
     inode_t *ino = get_inode(inum);
-    if (ino == NULL || ino->type == 0)
-        exit(EXIT_FAILURE);
+    if (ino == NULL || ino->type == 0) {
+        *size = 0;
+        return;
+    }
 
     *size = ino->size;
     *buf_out = (char *)malloc(*size);
@@ -418,7 +434,7 @@ inode_manager::get_attr(uint32_t inum, extent_protocol::attr &a)
 
     inode_t *ino = get_inode(inum);
     if (ino == NULL)
-        exit(EXIT_FAILURE);
+        return;
 
     a.type = ino->type;
     a.atime = ino->atime;

@@ -25,11 +25,13 @@ class extent_server {
  public:
   extent_server();
 
-  int create(uint32_t type, extent_protocol::extentid_t &id);
-  int put(extent_protocol::extentid_t id, std::string, int &);
+  int tx_begin(int, chfs_command::txid_t &tid);
+  int tx_commit(int, chfs_command::txid_t &tid);
+  int create(uint32_t type, chfs_command::txid_t tid, extent_protocol::extentid_t &id);
+  int put(extent_protocol::extentid_t id, std::string, chfs_command::txid_t &tid);
   int get(extent_protocol::extentid_t id, std::string &);
   int getattr(extent_protocol::extentid_t id, extent_protocol::attr &);
-  int remove(extent_protocol::extentid_t id, int &);
+  int remove(extent_protocol::extentid_t id, chfs_command::txid_t &tid);
 
   // Your code here for lab2A: add logging APIs
 };

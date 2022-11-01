@@ -15,12 +15,15 @@ class extent_protocol {
     get,
     getattr,
     remove,
-    create
+    create,
+    begin,
+    commit
   };
 
   enum types {
     T_DIR = 1,
-    T_FILE
+    T_FILE,
+    T_SYMLINK = 7
   };
 
   struct attr {

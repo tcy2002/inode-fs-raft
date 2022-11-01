@@ -35,7 +35,6 @@ typedef struct superblock {
 class block_manager {
  private:
   disk *d;
-  std::map <uint32_t, int> using_blocks;
  public:
   block_manager();
   struct superblock sb;
@@ -55,13 +54,13 @@ class block_manager {
 //(BLOCK_SIZE / sizeof(struct inode))
 
 // Block containing inode i
-#define IBLOCK(i, nblocks)     ((nblocks)/BPB + (i)/IPB + 3)
+#define IBLOCK(i, nblocks)     ((nblocks)/BPB + (i)/IPB + 1)
 
 // Bitmap bits per block
 #define BPB           (BLOCK_SIZE*8)
 
 // Block containing bit for block b
-#define BBLOCK(b) ((b)/BPB + 2)
+#define BBLOCK(b) ((b)/BPB + 1)
 
 #define NDIRECT 100
 #define NINDIRECT (BLOCK_SIZE / sizeof(uint))
@@ -81,10 +80,13 @@ class inode_manager {
   block_manager *bm;
   struct inode* get_inode(uint32_t inum);
   void put_inode(uint32_t inum, struct inode *ino);
+  int read_blocks(blockid_t *blocks, char *buf_out, int size, int max_num);
+  int write_blocks(blockid_t *blocks, const char *buf, int size, int max_num);
+  void remove_indirect(blockid_t bnum_i);
 
  public:
   inode_manager();
-  uint32_t alloc_inode(uint32_t type);
+  uint32_t alloc_inode(uint32_t type, uint32_t inum=0);
   void free_inode(uint32_t inum);
   void read_file(uint32_t inum, char **buf, int *size);
   void write_file(uint32_t inum, const char *buf, int size);

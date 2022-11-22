@@ -7,7 +7,9 @@
 #include <arpa/inet.h>
 
 lock_server::lock_server():
-  nacquire (0)
+  mutex(PTHREAD_MUTEX_INITIALIZER),
+  cond(PTHREAD_COND_INITIALIZER),
+  nacquire(0)
 {
 }
 
@@ -25,6 +27,22 @@ lock_server::acquire(int clt, lock_protocol::lockid_t lid, int &r)
 {
   lock_protocol::status ret = lock_protocol::OK;
 	// Your lab2B part2 code goes here
+    pthread_mutex_lock(&mutex);
+    if (locks.count(lid) == 0) {
+        printf("%d, add a lock: %lld\n",clt , lid);
+        locks.emplace(lid, LOCKED);
+    } else if (locks[lid] == FREE) {
+        printf("%d, get a lock: %lld\n",clt , lid);
+        locks[lid] = LOCKED;
+    } else {
+        // wait
+        printf("%d, wait a lock: %lld\n",clt , lid);
+        while (locks[lid] == LOCKED)
+            pthread_cond_wait(&cond, &mutex);
+        printf("%d, get a lock after waiting: %lld\n",clt , lid);
+        locks[lid] = LOCKED;
+    }
+    pthread_mutex_unlock(&mutex);
   return ret;
 }
 
@@ -33,5 +51,10 @@ lock_server::release(int clt, lock_protocol::lockid_t lid, int &r)
 {
   lock_protocol::status ret = lock_protocol::OK;
 	// Your lab2B part2 code goes here
+    printf("%d, release a lock: %lld\n",clt , lid);
+    pthread_mutex_lock(&mutex);
+    locks[lid] = FREE;
+    pthread_cond_signal(&cond);
+    pthread_mutex_unlock(&mutex);
   return ret;
 }

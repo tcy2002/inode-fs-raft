@@ -68,9 +68,9 @@ public:
         return head_size + old_val.size() + new_val.size();
     }
 
-    std::string to_string() {
+    void to_string(std::string &str) {
         int64_t len = size(), len_str;
-        char buf[len]{};
+        char *buf = new char[len];
         char *p = buf;
 
         memcpy(p, (char *)&type, sizeof(cmd_type));
@@ -97,7 +97,8 @@ public:
         p += sizeof(uint64_t);
         memcpy(p, new_val.c_str(), len_str);
 
-        return std::string(buf, len);
+        str.assign(buf, len);
+        delete[] buf;
     }
 
     void print_data() {
@@ -196,6 +197,8 @@ persister<command>::~persister() {
 template<typename command>
 chfs_command::txid_t persister<command>::append_begin() {
     std::unique_lock<std::mutex> lock(mtx);
+    std::string buf;
+    uint64_t size;
     PRINT_MSG("append_begin", "pre");
 
     if (chfs_command::head_size + log_size > MAX_LOG_SZ)
@@ -203,10 +206,12 @@ chfs_command::txid_t persister<command>::append_begin() {
 
     command log(chfs_command::CMD_BEGIN, tid, aid++, -1, 0, "", "");
     log_entries.push_back(log);
-    log_size += log.size();
+    size = log.size();
+    log_size += size;
+    log.to_string(buf);
 
     FILE *log_file = fopen(file_path_logfile.c_str(), "a");
-    fwrite(log.to_string().c_str(), log.size(), 1, log_file);
+    fwrite(buf.c_str(), size, 1, log_file);
     fclose(log_file);
     PRINT_MSG("append_begin", "finished");
 
@@ -217,10 +222,14 @@ template<typename command>
 void persister<command>::append_log(chfs_command::txid_t ctid, chfs_command::cmd_type type, chfs_command::inum_t name, const std::string &old_val, const std::string &new_val) {
     // Your code here for lab2A
     std::unique_lock<std::mutex> lock(mtx);
+    std::string buf;
+    uint64_t size;
     PRINT_MSG("append_log", "pre");
 
     if (chfs_command::head_size + old_val.size() + new_val.size() + log_size > MAX_LOG_SZ)
         checkpoint();
+
+    PRINT_MSG("append_log", "finished");
 
     chfs_command::actid_t pre = -1;
     for (auto i = log_entries.rbegin(); i != log_entries.rend(); i++)
@@ -229,12 +238,18 @@ void persister<command>::append_log(chfs_command::txid_t ctid, chfs_command::cmd
             break;
         }
 
+    PRINT_MSG("append_log", "finished");
+
     command log(type, ctid, aid++, pre, name, old_val, new_val);
     log_entries.push_back(log);
-    log_size += log.size();
+    size = log.size();
+    log_size += size;
+    log.to_string(buf);
+
+    PRINT_MSG("append_log", "finished");
 
     FILE *log_file = fopen(file_path_logfile.c_str(), "a");
-    fwrite(log.to_string().c_str(), log.size(), 1, log_file);
+    fwrite(buf.c_str(), size, 1, log_file);
     fclose(log_file);
     PRINT_MSG("append_log", "finished");
 }
@@ -242,6 +257,8 @@ void persister<command>::append_log(chfs_command::txid_t ctid, chfs_command::cmd
 template<typename command>
 void persister<command>::append_commit(chfs_command::txid_t ctid) {
     std::unique_lock<std::mutex> lock(mtx);
+    std::string buf;
+    uint64_t size;
     PRINT_MSG("append_commit", "pre");
 
     if (chfs_command::head_size + log_size > MAX_LOG_SZ)
@@ -256,10 +273,12 @@ void persister<command>::append_commit(chfs_command::txid_t ctid) {
 
     command log(chfs_command::CMD_COMMIT, ctid, aid++, pre, 0, "", "");
     log_entries.push_back(log);
-    log_size += log.size();
+    size = log.size();
+    log_size += size;
+    log.to_string(buf);
 
     FILE *log_file = fopen(file_path_logfile.c_str(), "a");
-    fwrite(log.to_string().c_str(), log.size(), 1, log_file);
+    fwrite(buf.c_str(), size, 1, log_file);
     fclose(log_file);
     PRINT_MSG("append_commit", "finished");
 }
@@ -384,8 +403,11 @@ void persister<command>::load_logs(const char *filename) {
 template<typename command>
 void persister<command>::save_logs(const char *filename) {
     FILE *file = fopen(filename, "w");
-    for (auto i = log_entries.begin(); i < log_entries.end(); i++)
-        fwrite(i->to_string().c_str(), i->size(), 1, file);
+    std::string buf;
+    for (auto i = log_entries.begin(); i < log_entries.end(); i++) {
+        i->to_string(buf);
+        fwrite(buf.c_str(), i->size(), 1, file);
+    }
     fclose(file);
 }
 

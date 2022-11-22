@@ -83,7 +83,7 @@ block_manager::alloc_block()
     blockid_t blockid = BBLOCK(bnum);
     int byteid = ((bnum % BPB) / 8);
     char mask = 0x01 << ((bnum % BPB) % 8);
-    char buf[BLOCK_SIZE];
+    char *buf = new char[BLOCK_SIZE];
 
     read_block(blockid, buf);
     buf[byteid] |= mask;
@@ -92,8 +92,10 @@ block_manager::alloc_block()
     while (1) {
         while (mask & buf[byteid])
             ++free_bnum && (mask <<= 1);
-        if (mask)
+        if (mask) {
+            delete[] buf;
             return bnum;
+        }
         mask = 0x01;
         byteid++;
 
@@ -109,6 +111,7 @@ block_manager::alloc_block()
         }
     }
 
+    delete[] buf;
     PRINT_ERROR("alloc_block", "no free block", 0)
     return 0;
 }
@@ -125,7 +128,7 @@ block_manager::free_block(uint32_t id)
     blockid_t blockid = BBLOCK(id);
     int byteid = (id % BPB) / 8;
     char mask = 0x01 << ((id % BPB) % 8);
-    char buf[BLOCK_SIZE];
+    char *buf = new char[BLOCK_SIZE];
 
     read_block(blockid, buf);
     buf[byteid] &= ~mask;
@@ -133,6 +136,8 @@ block_manager::free_block(uint32_t id)
 
     if (id < free_bnum)
         free_bnum = id;
+
+    delete[] buf;
 }
 
 // The layout of disk should be like this:
@@ -165,7 +170,8 @@ block_manager::write_block(uint32_t id, const char *buf)
 /* read the data of a file from multiple blocks */
 int
 inode_manager::read_blocks(blockid_t *blocks, char *buf_out, int size, int max_num) {
-    char *buf_p = buf_out, block_buf[BLOCK_SIZE];
+    char *buf_p = buf_out;
+    char *block_buf = new char[BLOCK_SIZE];
     int id = 0, r_size = size;
 
     while (id < max_num && blocks[id] > 0) {
@@ -177,6 +183,7 @@ inode_manager::read_blocks(blockid_t *blocks, char *buf_out, int size, int max_n
         id++;
     }
 
+    delete[] block_buf;
     return r_size;
 }
 
@@ -184,7 +191,8 @@ inode_manager::read_blocks(blockid_t *blocks, char *buf_out, int size, int max_n
 int
 inode_manager::write_blocks(blockid_t *blocks, const char *buf, int size, int max_num) {
     int id = 0, r_size = size;
-    char block_buf[BLOCK_SIZE], *buf_p = (char *)buf;
+    char *buf_p = (char *)buf;
+    char *block_buf = new char[BLOCK_SIZE];
 
     while (id < max_num && (blocks[id] > 0 || r_size > 0)) {
         if (r_size > 0) {
@@ -206,6 +214,7 @@ inode_manager::write_blocks(blockid_t *blocks, const char *buf, int size, int ma
         id++;
     }
 
+    delete[] block_buf;
     return r_size;
 }
 
@@ -311,7 +320,7 @@ inode_manager::get_inode(uint32_t inum)
    */
     CHECK_INUM("get_inode", inum)
 
-    char buf[BLOCK_SIZE];
+    char *buf = new char[BLOCK_SIZE];
     inode_t *ino_disk;
 
     bm->read_block(IBLOCK(inum, bm->sb.nblocks), buf);
@@ -319,6 +328,7 @@ inode_manager::get_inode(uint32_t inum)
     ino = (inode_t *)malloc(sizeof(inode_t));
     *ino = *ino_disk;
 
+    delete[] buf;
     CHECK_TYPE("get_inode", ino->type)
 
   return ino;
@@ -332,13 +342,15 @@ inode_manager::put_inode(uint32_t inum, struct inode *ino)
     CHECK_INUM("put_inode", inum)
     CHECK_TYPE("put_inode", ino->type)
 
-  char buf[BLOCK_SIZE];
+  char *buf = new char[BLOCK_SIZE];
   struct inode *ino_disk;
 
   bm->read_block(IBLOCK(inum, bm->sb.nblocks), buf);
   ino_disk = (struct inode*)buf + inum%IPB;
   *ino_disk = *ino;
   bm->write_block(IBLOCK(inum, bm->sb.nblocks), buf);
+
+  delete[] buf;
 }
 
 /* Get all the data of a file by inum. 
@@ -457,8 +469,6 @@ inode_manager::remove_file(uint32_t inum)
     inode_t *ino = get_inode(inum);
     if (ino == NULL)
         exit(EXIT_FAILURE);
-    if (ino->type == 0)
-        return;
 
     for (int id = 0; id < NDIRECT && ino->blocks[id] > 0; id++)
         bm->free_block(ino->blocks[id]);

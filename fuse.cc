@@ -442,7 +442,7 @@ fuseserver_mkdir(fuse_req_t req, fuse_ino_t parent, const char *name,
     int ret;
     chfs_client::inum ino;
 
-    printf("my symlink\n");
+    printf("fuseserver_mkdir\n");
 
     if ((ret = chfs->mkdir(parent, name, mode, ino)) != chfs_client::OK) {
         if (ret == chfs_client::EXIST)
@@ -458,6 +458,7 @@ fuseserver_mkdir(fuse_req_t req, fuse_ino_t parent, const char *name,
     }
 
     fuse_reply_entry(req, &e);
+    printf("fuseserver_mkdir finished\n");
 
 #else
     fuse_reply_err(req, ENOSYS);

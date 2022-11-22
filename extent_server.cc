@@ -24,12 +24,12 @@ int extent_server::tx_begin(int, chfs_command::txid_t &tid) {
     return extent_protocol::OK;
 }
 
-int extent_server::tx_commit(int, chfs_command::txid_t &tid) {
+int extent_server::tx_commit(chfs_command::txid_t tid, int &) {
     _persister->append_commit(tid);
     return extent_protocol::OK;
 }
 
-int extent_server::create(uint32_t type, chfs_command::txid_t tid, extent_protocol::extentid_t &id)
+int extent_server::create(chfs_command::txid_t tid, uint32_t type, extent_protocol::extentid_t &id)
 {
   // alloc a new inode and return inum
   printf("extent_server: create inode\n");
@@ -43,15 +43,13 @@ int extent_server::create(uint32_t type, chfs_command::txid_t tid, extent_protoc
   return extent_protocol::OK;
 }
 
-int extent_server::put(extent_protocol::extentid_t id, std::string buf, chfs_command::txid_t &tid)
+int extent_server::put(chfs_command::txid_t tid, extent_protocol::extentid_t id, std::string buf, int &)
 {
   printf("extent_server: put %lld\n", id);
   id &= 0x7fffffff;
 
-  printf("\nput_buf: %.*s\n\n", (int)buf.size(), buf.c_str());
   std::string str;
   get(id, str);
-  printf("put_str: %.*s\n\n", (int)str.size(), str.c_str());
 
   im->write_file(id, buf.c_str(), buf.size());
   _persister->append_log(tid, chfs_command::CMD_PUT, id, str, buf);
@@ -93,7 +91,7 @@ int extent_server::getattr(extent_protocol::extentid_t id, extent_protocol::attr
   return extent_protocol::OK;
 }
 
-int extent_server::remove(extent_protocol::extentid_t id, chfs_command::txid_t &tid)
+int extent_server::remove(chfs_command::txid_t tid, extent_protocol::extentid_t id, int &)
 {
   printf("extent_server: remove %lld\n", id);
   id &= 0x7fffffff;

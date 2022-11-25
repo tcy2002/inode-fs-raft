@@ -237,7 +237,7 @@ template <typename state_machine, typename command>
 void raft<state_machine, command>::start() {
     // Lab3: Your code here
 
-    RAFT_LOG("start");
+    RAFT_LOG("start")
     this->background_election = new std::thread(&raft::run_background_election, this);
     this->background_ping = new std::thread(&raft::run_background_ping, this);
     this->background_commit = new std::thread(&raft::run_background_commit, this);

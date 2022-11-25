@@ -36,12 +36,6 @@ struct entry {
     uint32_t inum;
 };
 
-chfs_client::chfs_client()
-{
-    ec = new extent_client();
-
-}
-
 chfs_client::chfs_client(std::string extent_dst)
 {
     ec = new extent_client(extent_dst);

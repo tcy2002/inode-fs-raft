@@ -38,11 +38,11 @@ class raft {
 
 public:
     raft(
-        rpcs *rpc_server,
-        std::vector<rpcc *> rpc_clients,
-        int idx,
-        raft_storage<command> *storage,
-        state_machine *state);
+            rpcs *rpc_server,
+            std::vector<rpcc *> rpc_clients,
+            int idx,
+            raft_storage<command> *storage,
+            state_machine *state);
     ~raft();
 
     // start the raft node.
@@ -82,7 +82,6 @@ private:
 
     int granted_num;
     int rejected_num;
-    std::vector<bool> vote_replied{};
     bool update;
 
     int size_nodes;
@@ -91,6 +90,7 @@ private:
     std::vector<int> next_index{};
     std::vector<int> match_index{};
 
+    std::vector<bool> vote_replied{};
     std::vector<bool> heartbeat_replied{};
 
     std::atomic_bool stopped;
@@ -152,29 +152,31 @@ private:
 
 template <typename state_machine, typename command>
 raft<state_machine, command>::raft(rpcs *server, std::vector<rpcc *> clients, int idx, raft_storage<command> *storage, state_machine *state) :
-    storage(storage),
-    state(state),
-    rpc_server(server),
-    rpc_clients(clients),
-    my_id(idx),
-    last_log_term(0),
-    last_log_index(0),
-    commit_index(0),
-    last_applied(0),
-    granted_num(0),
-    rejected_num(0),
-    update(false),
-    stopped(false),
-    role(follower),
-    current_term(0),
-    leader_id(-1),
-    background_election(nullptr),
-    background_ping(nullptr),
-    background_commit(nullptr),
-    background_apply(nullptr) {
+        storage(storage),
+        state(state),
+        rpc_server(server),
+        rpc_clients(clients),
+        my_id(idx),
+        last_log_term(0),
+        last_log_index(0),
+        commit_index(0),
+        last_applied(0),
+        granted_num(0),
+        rejected_num(0),
+        update(false),
+        stopped(false),
+        role(follower),
+        current_term(0),
+        leader_id(-1),
+        background_election(nullptr),
+        background_ping(nullptr),
+        background_commit(nullptr),
+        background_apply(nullptr) {
+    RAFT_LOG("constructor")
     thread_pool = new ThrPool(32);
 
     // Register the rpcs.
+    std::unique_lock<std::mutex> _(mtx);
     rpc_server->reg(raft_rpc_opcodes::op_request_vote, this, &raft::request_vote);
     rpc_server->reg(raft_rpc_opcodes::op_append_entries, this, &raft::append_entries);
     rpc_server->reg(raft_rpc_opcodes::op_install_snapshot, this, &raft::install_snapshot);
@@ -186,10 +188,19 @@ raft<state_machine, command>::raft(rpcs *server, std::vector<rpcc *> clients, in
     next_index.reserve(size_nodes);
     match_index.reserve(size_nodes);
     heartbeat_replied.reserve(size_nodes);
+
+    // restore
+    storage->load("last_log_index", last_log_index);
+    storage->load("last_log_term", last_log_term);
+    storage->load("commit_index", commit_index);
+    storage->load("current_term", current_term);
+    storage->load("log", log);
+    RAFT_LOG("construct finished")
 }
 
 template <typename state_machine, typename command>
 raft<state_machine, command>::~raft() {
+    RAFT_LOG("destructor")
     if (background_ping) {
         delete background_ping;
     }
@@ -214,11 +225,13 @@ raft<state_machine, command>::~raft() {
 template <typename state_machine, typename command>
 void raft<state_machine, command>::stop() {
     stopped.store(true);
+    RAFT_LOG("end")
     background_ping->join();
     background_election->join();
     background_commit->join();
     background_apply->join();
     thread_pool->destroy();
+    RAFT_LOG("join finished")
 }
 
 template <typename state_machine, typename command>
@@ -255,9 +268,17 @@ bool raft<state_machine, command>::new_command(command cmd, int &term, int &inde
 
     RAFT_LOG("leader receives new command")
 
+    int size = cmd.size();
+    char buf[size];
+    cmd.serialize(buf, size);
+
     log.push_back({cmd, current_term});
+    storage->store("log", log.back());
     last_log_index = log.size();
     last_log_term = current_term;
+    storage->store("last_log_index", last_log_index);
+    storage->store("last_log_term", last_log_term);
+
     next_index[my_id] = last_log_index + 1;
     match_index[my_id] = last_log_index;
     index = last_log_index;
@@ -287,9 +308,12 @@ int raft<state_machine, command>::request_vote(request_vote_args args, request_v
 
     if (args.term > current_term) {
         current_term = args.term;
+        storage->store("current_term", current_term);
+
         if (args.last_log_term > last_log_term || (args.last_log_term == last_log_term && args.last_log_index >= last_log_index)) {
             reply.vote_granted = true;
             leader_id = args.candidate_id;
+            role = follower;
             update = true;
             RAFT_LOG("grant vote for node %d", args.candidate_id)
         } else {
@@ -298,7 +322,7 @@ int raft<state_machine, command>::request_vote(request_vote_args args, request_v
         }
     } else {
         reply.vote_granted = false;
-        RAFT_LOG("reject vote for node %d: smaller term", args.candidate_id)
+        RAFT_LOG("reject vote for node %d: no bigger term", args.candidate_id)
     }
 
     reply.term = current_term;
@@ -332,6 +356,7 @@ void raft<state_machine, command>::handle_request_vote_reply(int target, const r
         }
         if (reply.term > current_term) {
             current_term = reply.term;
+            storage->store("current_term", current_term);
             role = follower;
             update = true;
             RAFT_LOG("seeing bigger term, revert to follower")
@@ -346,8 +371,12 @@ int raft<state_machine, command>::append_entries(append_entries_args<command> ar
 
     RAFT_LOG("receive entries from leader %d, prev is %d", arg.leader_id, arg.prev_log_index)
     RAFT_LOG("old size is %d, received size is %ld", last_log_index, arg.entries.size())
+
     if (arg.term >= current_term) {
-        current_term = arg.term;
+        if (arg.term > current_term) {
+            current_term = arg.term;
+            storage->store("current_term", current_term);
+        }
         update = true;
         reply.success = true;
         role = follower;
@@ -360,6 +389,13 @@ int raft<state_machine, command>::append_entries(append_entries_args<command> ar
                 RAFT_LOG("reject: no prev entry")
             } else if (log[arg.prev_log_index - 1].term != arg.prev_log_term) {
                 log.erase(log.begin() + arg.prev_log_index - 1, log.end());
+                storage->remove("log", arg.prev_log_index);
+
+                last_log_index = log.size();
+                last_log_term = (last_log_index ? log.back().term : 0);
+                storage->store("last_log_index", last_log_index);
+                storage->store("last_log_term", last_log_term);
+
                 reply.success = false;
                 RAFT_LOG("reject: prev entry doesn't match")
             }
@@ -369,15 +405,25 @@ int raft<state_machine, command>::append_entries(append_entries_args<command> ar
             // add entries
             if (!arg.entries.empty()) {
                 log.erase(log.begin() + arg.prev_log_index, log.end());
-                for (auto &ent: arg.entries)
+                storage->remove("log", arg.prev_log_index + 1);
+                for (auto &ent: arg.entries) {
+                    storage->store("log", ent);
                     log.push_back(ent);
+                }
+
                 last_log_index = log.size();
                 last_log_term = log.back().term;
+                if (commit_index > last_log_index)
+                    commit_index = last_log_index;
+                storage->store("last_log_index", last_log_index);
+                storage->store("last_log_term", last_log_term);
             }
 
             // update commit index
-            if (arg.leader_commit > commit_index && last_log_term == current_term)
-                commit_index = last_log_index < arg.leader_commit ? last_log_index : arg.leader_commit;
+            if (arg.leader_commit > commit_index && last_log_term == current_term) {
+                commit_index = (arg.leader_commit <= last_log_index ? arg.leader_commit : last_log_index);
+                storage->store("commit_index", commit_index);
+            }
 
             RAFT_LOG("leader commit: %d", arg.leader_commit)
             RAFT_LOG("last log index: %d", last_log_index)
@@ -403,9 +449,10 @@ void raft<state_machine, command>::handle_append_entries_reply(int node, const a
 
     if (reply.term > current_term) {
         current_term = reply.term;
+        storage->store("current_term", current_term);
         role = follower;
         update = true;
-        RAFT_LOG("seeing bigger term from node %d", reply.term)
+        RAFT_LOG("seeing bigger term from node %d", node)
     } else if (!arg.entries.empty() || arg.prev_log_index > 0) {
         if (reply.success) {
             next_index[node] = last_log_index + 1;
@@ -421,11 +468,12 @@ void raft<state_machine, command>::handle_append_entries_reply(int node, const a
                         sum++;
                 if ((sum >= size_nodes / 2 + 1) && log[idx - 1].term == current_term) {
                     commit_index = idx;
+                    storage->store("commit_index", commit_index);
                     RAFT_LOG("new command is committed")
                     break;
                 }
             }
-        } else {
+        } else if (next_index[node] > 1) {
             next_index[node]--;
         }
     }
@@ -516,7 +564,9 @@ void raft<state_machine, command>::run_background_election() {
             if (timeout > 0)
                 continue;
             timeout = RAND(min_timeout);
+
             current_term++;
+            storage->store("current_term", current_term);
             granted_num = 1;
             rejected_num = 0;
             vote_replied.assign(size_nodes, false);
@@ -567,7 +617,7 @@ void raft<state_machine, command>::run_background_commit() {
             heartbeat_replied[id] = false;
             if (match_index[id] < last_log_index) {
                 args.prev_log_index = next_index[id] - 1;
-                args.prev_log_term = args.prev_log_index ? log[args.prev_log_index - 1].term : 0;
+                args.prev_log_term = (args.prev_log_index ? log[args.prev_log_index - 1].term : 0);
                 args.entries.clear();
                 // commit all necessary entries at a time
                 args.entries.assign(log.begin() + args.prev_log_index, log.end());
@@ -605,31 +655,26 @@ void raft<state_machine, command>::run_background_ping() {
     // Periodly send empty append_entries RPC to the followers.
 
     // Only work for the leader.
-    int timeout = 120;
 
     while (true) {
         if (is_stopped()) return;
         // Lab3: Your code here:
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        std::this_thread::sleep_for(std::chrono::milliseconds(120));
         std::unique_lock<std::mutex> _(mtx);
 
         if (role != leader)
             continue;
 
-        if ((timeout -= 10) > 0)
-            continue;
-
         heartbeat_replied.assign(size_nodes, false);
 
-        append_entries_args<command> args = {current_term, my_id, 0, 0, commit_index, {}};
+        append_entries_args<command> args = {current_term, my_id, 0, 0, 0, {}};
         for (int id = 0; id < size_nodes; id++) {
             if (id == my_id)
                 continue;
+            args.leader_commit = (commit_index <= match_index[id] ? commit_index : match_index[id]);
             thread_pool->addObjJob(this, &raft::send_append_entries, id, args);
             RAFT_LOG("send heartbeat to node %d", id)
         }
-
-        timeout = 120;
     }
 }
 

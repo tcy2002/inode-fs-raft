@@ -13,12 +13,17 @@ public:
     ~raft_storage();
     // Lab3: Your code here
     void store(const std::string &name, int value);
-    void store(const std::string &name, log_entry<command> &value);
-
     void load(const std::string &name, int &value);
+
+    void store(const std::string &name, log_entry<command> &value);
     void load(const std::string &name, std::vector<log_entry<command>> &value);
 
-    void remove(const std::string &name, int index);
+    void store(const std::string &name, std::vector<char> &value);
+    void load(const std::string &name, std::vector<char> &value);
+
+    void remove_back(const std::string &name, int index);
+    void remove_front(const std::string &name, int index);
+    void remove_all(const std::string &name);
 
 private:
     // Lab3: Your code here
@@ -48,6 +53,17 @@ void raft_storage<command>::store(const std::string &name, int value) {
 }
 
 template <typename command>
+void raft_storage<command>::load(const std::string &name, int &value) {
+    std::unique_lock<std::mutex> _(mtx);
+    std::ifstream file(dir + "/" + name);
+    if (!file.is_open())
+        return;
+
+    file >> value;
+    file.close();
+}
+
+template <typename command>
 void raft_storage<command>::store(const std::string &name, log_entry<command> &value) {
     std::unique_lock<std::mutex> _(mtx);
     std::ofstream file(dir + "/" + name, std::ios::app);
@@ -63,17 +79,6 @@ void raft_storage<command>::store(const std::string &name, log_entry<command> &v
 
     file.close();
     delete[] buf;
-}
-
-template <typename command>
-void raft_storage<command>::load(const std::string &name, int &value) {
-    std::unique_lock<std::mutex> _(mtx);
-    std::ifstream file(dir + "/" + name);
-    if (!file.is_open())
-        return;
-
-    file >> value;
-    file.close();
 }
 
 template <typename command>
@@ -109,15 +114,74 @@ void raft_storage<command>::load(const std::string &name, std::vector<log_entry<
 }
 
 template <typename command>
-void raft_storage<command>::remove(const std::string &name, int index) {
+void raft_storage<command>::store(const std::string &name, std::vector<char> &value) {
     std::unique_lock<std::mutex> _(mtx);
+    std::ofstream file(dir + "/" + name);
+    file << (int)value.size() << " ";
+    for (auto c : value)
+        file.put(c);
+    file.close();
+}
+
+template <typename command>
+void raft_storage<command>::load(const std::string &name, std::vector<char> &value) {
+    std::unique_lock<std::mutex> _(mtx);
+    std::ifstream file(dir + "/" + name);
+    if (!file.is_open())
+        return;
+    int size = 0;
+    file >> size;
+    file.ignore();
+    value.assign(size, 0);
+    for (int i = 0; i < size; i++)
+        file.get(value[i]);
+    file.close();
+}
+
+template <typename command>
+void raft_storage<command>::remove_back(const std::string &name, int index) {
+    std::unique_lock<std::mutex> _(mtx);
+    if (index >= (int)log_line_size.size())
+        return;
     std::string file_path = dir + "/" + name;
     int size = 0;
-    for (int i = 0; i < index - 1; i++)
+    for (int i = 0; i < index; i++)
         size += log_line_size[i];
     truncate(file_path.c_str(), size);
-    log_line_size.erase(log_line_size.begin() + index - 1, log_line_size.end());
+    log_line_size.erase(log_line_size.begin() + index, log_line_size.end());
     std::cout << "remove log: " << index << " current num: " << log_line_size.size() << std::endl;
+}
+
+template <typename command>
+void raft_storage<command>::remove_front(const std::string &name, int index) {
+    std::unique_lock<std::mutex> _(mtx);
+    if (index <= 0)
+        return;
+    std::string file_path = dir + "/" + name;
+
+    std::ifstream old_file(file_path);
+    if (!old_file.is_open())
+        return;
+    old_file.seekg(0, std::ifstream::end);
+    int length = old_file.tellg(), size = 0, remainder;
+    for (int i = 0; i < index; i++)
+        size += log_line_size[i];
+    remainder = length - size;
+    auto buf = new char[remainder];
+    old_file.seekg(size);
+    old_file.read(buf, remainder);
+    old_file.close();
+
+    std::ofstream new_file(file_path);
+    new_file.write(buf, remainder);
+    new_file.close();
+    log_line_size.erase(log_line_size.begin(), log_line_size.begin() + index);
+    std::cout << "remove front: " << index << " current num: " << log_line_size.size() << std::endl;
+}
+
+template <typename command>
+void raft_storage<command>::remove_all(const std::string &name) {
+    remove_back(name, 0);
 }
 
 template <typename command>

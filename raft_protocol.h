@@ -84,10 +84,9 @@ marshall &operator<<(marshall &m, const append_entries_args<command> &args) {
     m << args.prev_log_index;
     m << args.prev_log_term;
     m << args.leader_commit;
-    int size = args.entries.size();
-    m << size;
-    for (int i = 0; i < size; i++)
-        m << args.entries[i];
+    m << (int)args.entries.size();
+    for (auto &ent : args.entries)
+        m << ent;
     return m;
 }
 
@@ -121,6 +120,11 @@ unmarshall &operator>>(unmarshall &m, append_entries_reply &reply);
 class install_snapshot_args {
 public:
     // Lab3: Your code here
+    int term;
+    int leader_id;
+    int last_included_index;
+    int last_included_term;
+    std::vector<char> data;
 };
 
 marshall &operator<<(marshall &m, const install_snapshot_args &args);
@@ -129,6 +133,7 @@ unmarshall &operator>>(unmarshall &m, install_snapshot_args &args);
 class install_snapshot_reply {
 public:
     // Lab3: Your code here
+    int term;
 };
 
 marshall &operator<<(marshall &m, const install_snapshot_reply &reply);

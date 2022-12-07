@@ -351,6 +351,7 @@ TEST_CASE(part2, rpc_count, "RPC counts aren't too high") {
 
     ASSERT(total1 <= 30 && total1 >= 1,
            "too many or few RPCs (" << total1 << ") to elect initial leader");
+    std::cout << total1 << std::endl;
 
     bool success = false;
     int total2;

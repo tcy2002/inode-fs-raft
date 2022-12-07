@@ -111,6 +111,7 @@ class append_entries_reply {
 public:
     // Lab3: Your code here
     int term;
+    int follower_commit;
     bool success;
 };
 

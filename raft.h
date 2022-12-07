@@ -21,11 +21,11 @@ class raft {
     static_assert(std::is_base_of<raft_command, command>(), "command must inherit from raft_command");
 
     friend class thread_pool;
-/*
+
 #define RAFT_LOG(fmt, args...) \
     do {                       \
     } while (0);
-*/
+/*
 #define RAFT_LOG(fmt, args...)                                                                                   \
     do {                                                                                                         \
         auto now =                                                                                               \
@@ -34,7 +34,7 @@ class raft {
                 .count();                                                                                        \
         printf("[%ld][%s:%d][node %d term %d] " fmt "\n", now, __FILE__, __LINE__, my_id, current_term, ##args); \
     } while (0);
-
+*/
 #define IDX(index) ((index) - last_snapshot_index - 1)
 #define LOG(index) log[IDX(index)]
 #define LEN(size) ((size) + last_snapshot_index)
@@ -368,13 +368,15 @@ void raft<state_machine, command>::handle_request_vote_reply(int target, const r
         role = follower;
         update = true;
         RAFT_LOG("seeing bigger term, revert to follower")
+        return;
     }
 
     if (role != candidate)
         return;
     if (reply.vote_granted) {
+        granted_num++;
         // majority granted
-        if ((++granted_num) >= size_nodes / 2 + 1) {
+        if (granted_num >= size_nodes / 2 + 1) {
             role = leader;
             next_index.assign(size_nodes, last_log_index + 1);
             match_index.assign(size_nodes, 0);
@@ -383,7 +385,8 @@ void raft<state_machine, command>::handle_request_vote_reply(int target, const r
         }
     } else {
         // majority rejected
-        if ((++rejected_num) >= size_nodes / 2 + 1) {
+        rejected_num++;
+        if (rejected_num >= size_nodes / 2 + 1) {
             role = follower;
             RAFT_LOG("has been rejected by majority, revert to follower")
         }
@@ -410,28 +413,28 @@ int raft<state_machine, command>::append_entries(append_entries_args<command> ar
 
         int index = IDX(arg.prev_log_index);
 
-        // 0 means heartbeat or no previous entries
-        if (index >= 0) {
-            if (last_log_index < arg.prev_log_index) {
-                reply.success = false;
-                RAFT_LOG("reject: no prev entry")
-            } else if (LOG(arg.prev_log_index).term != arg.prev_log_term) {
-                log.erase(log.begin() + index, log.end());
-                storage->remove_back("log", index);
+        if (!arg.entries.empty() || arg.prev_log_index > 0) {
+            // maybe no previous entries
+            if (index >= 0) {
+                if (last_log_index < arg.prev_log_index) {
+                    reply.success = false;
+                    RAFT_LOG("reject: no prev entry")
+                } else if (LOG(arg.prev_log_index).term != arg.prev_log_term) {
+                    log.erase(log.begin() + index, log.end());
+                    storage->remove_back("log", index);
 
-                last_log_index = LEN(log.size());
-                last_log_term = (log.size() ? log.back().term : 0);
-                storage->store("last_log_index", last_log_index);
-                storage->store("last_log_term", last_log_term);
+                    last_log_index = LEN(log.size());
+                    last_log_term = (log.size() ? log.back().term : 0);
+                    storage->store("last_log_index", last_log_index);
+                    storage->store("last_log_term", last_log_term);
 
-                reply.success = false;
-                RAFT_LOG("reject: prev entry doesn't match")
+                    reply.success = false;
+                    RAFT_LOG("reject: prev entry doesn't match")
+                }
             }
-        }
 
-        if (reply.success) {
             // add entries
-            if (!arg.entries.empty()) {
+            if (reply.success && !arg.entries.empty()) {
                 log.erase(log.begin() + (index + 1), log.end());
                 storage->remove_back("log", index + 1);
                 for (auto &ent: arg.entries) {
@@ -444,18 +447,16 @@ int raft<state_machine, command>::append_entries(append_entries_args<command> ar
                 storage->store("last_log_index", last_log_index);
                 storage->store("last_log_term", last_log_term);
             }
-
-            // update commit index
-            if (arg.leader_commit > commit_index && last_log_term == current_term) {
-                commit_index = (arg.leader_commit <= last_log_index ? arg.leader_commit : last_log_index);
-                storage->store("commit_index", commit_index);
-            }
-
-            RAFT_LOG("leader commit: %d", arg.leader_commit)
-            RAFT_LOG("last log index: %d", last_log_index)
-            RAFT_LOG("commit index: %d", commit_index)
-            RAFT_LOG("last applied: %d", last_applied_index)
         }
+
+        // update commit index
+        if (reply.success && arg.leader_commit > commit_index && last_log_term == current_term) {
+            commit_index = (arg.leader_commit <= last_log_index ? arg.leader_commit : last_log_index);
+            storage->store("commit_index", commit_index);
+        }
+
+        RAFT_LOG("leader commit: %d, last log index: %d, commit index: %d, last applied: %d",
+                 arg.leader_commit, last_log_index, commit_index, last_applied_index)
     } else {
         reply.success = false;
         RAFT_LOG("reject: smaller term")
@@ -479,18 +480,16 @@ void raft<state_machine, command>::handle_append_entries_reply(int node, const a
         role = follower;
         update = true;
         RAFT_LOG("seeing bigger term from node %d", node)
-        return;
     }
 
     if (role != leader)
         return;
     if (!arg.entries.empty() || arg.prev_log_index > 0) {
         if (reply.success) {
-            next_index[node] = last_log_index + 1;
-            match_index[node] = last_log_index;
+            match_index[node] = arg.prev_log_index + (int)arg.entries.size();
+            next_index[node] = match_index[node] + 1;
 
             // check if exists new log entry which can be committed
-            RAFT_LOG("last log index: %d, commit index: %d", last_log_index, commit_index)
             int sum;
             for (int idx = last_log_index; idx > commit_index; idx--) {
                 sum = 0;
@@ -504,6 +503,9 @@ void raft<state_machine, command>::handle_append_entries_reply(int node, const a
                     break;
                 }
             }
+
+            RAFT_LOG("last log index: %d, commit index: %d, last applied: %d",
+                     last_log_index, commit_index, last_applied_index)
         } else {
             next_index[node]--;
         }
